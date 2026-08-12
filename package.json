@@ -1,0 +1,29 @@
+{
+  "name": "audio-spectrum-visualizer",
+  "version": "0.1.0",
+  "description": "Real-time audio spectrum visualizer using Web Audio API and React Three Fiber.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "three": "^0.175.0",
+    "@react-three/fiber": "^8.17.10",
+    "@react-three/drei": "^9.115.0",
+    "@react-three/postprocessing": "^2.16.3",
+    "postprocessing": "^6.37.4"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/three": "^0.175.0",
+    "@vitejs/plugin-react": "^4.5.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5"
+  }
+}
