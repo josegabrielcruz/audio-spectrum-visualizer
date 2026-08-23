@@ -1,5 +1,5 @@
-import { useMemo, useRef } from 'react'
-import { useFrame } from '@react-three/fiber'
+import { useEffect, useMemo, useRef } from 'react'
+import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { Config } from '../../types'
 
@@ -44,6 +44,41 @@ const LUT = (() => {
   return lut
 })()
 
+// ── Temporal smoothing strength ───────────────────────────────────────────
+// 0 = raw histogram, 1 = maximum lag. 0.45 blends 55% new / 45% previous:
+// peaks stay responsive while the surface undulates like liquid.
+const SMOOTH = 0.45
+
+// ── Shaders: peak glow + exponential tone-map ─────────────────────────────
+// The fragment shader brightens vertices above ~35% luminance with an
+// animated cyan shimmer, then applies exp() tone-mapping so bright peaks
+// bloom naturally without clamping.
+const VERT = /* glsl */`
+  attribute vec3 color;
+  varying   vec3 vColor;
+  void main() {
+    vColor      = color;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`
+const FRAG = /* glsl */`
+  uniform float uTime;
+  varying vec3  vColor;
+  void main() {
+    vec3  col      = vColor;
+    float lum      = dot(col, vec3(0.299, 0.587, 0.114));
+    // Steep power curve — glow only fires near the brightest peaks
+    float glowAmt  = pow(clamp((lum - 0.35) / 0.65, 0.0, 1.0), 2.5);
+    // Slow shimmer at ~8.5 Hz
+    float shimmer  = 0.65 + 0.35 * sin(uTime * 8.5);
+    // Additive cyan emission
+    col += glowAmt * shimmer * vec3(0.0, 0.75, 1.0);
+    // Exponential tone-map: prevents clipping, reads like natural bloom
+    col  = 1.0 - exp(-col * 1.5);
+    gl_FragColor = vec4(col, 1.0);
+  }
+`
+
 // ── Persistent history buffer (survives React StrictMode remounts) ────────
 // Circular: histHead points to the slot for the NEXT write
 const _hist = new Float32Array(ROWS * COLS)
@@ -61,6 +96,33 @@ export function SpectrogramTerrain({ analyserRef, frequencyDataRef, configRef }:
   const demoTimeRef = useRef(0)
   const monoLUT     = useRef(new Float32Array(256 * 3))
   const lastHue     = useRef(-1)
+  const prevRowRef  = useRef(new Float32Array(COLS))   // last-written row for smoothing
+
+  // ── Fog: terrain dissolves into deep space at the horizon ─────────────
+  const { scene } = useThree()
+  useEffect(() => {
+    scene.fog = new THREE.FogExp2(0x06090f, 0.12)   // density: tune to taste
+    return () => { scene.fog = null }
+  }, [scene])
+
+  // ── Materials (created once) ─────────────────────────────────────────
+  // glowMat: ShaderMaterial — base vertex colours + peak glow + tone-map
+  // wireMat: dim wireframe grid overlay for HUD-grid aesthetic
+  const glowMat = useMemo(() => new THREE.ShaderMaterial({
+    vertexShader:   VERT,
+    fragmentShader: FRAG,
+    uniforms:       { uTime: { value: 0 } },
+  }), [])
+
+  const wireMat = useMemo(() => new THREE.MeshBasicMaterial({
+    wireframe:          true,
+    color:              new THREE.Color('#00e5ff'),
+    transparent:        true,
+    opacity:            0.08,
+    polygonOffset:      true,
+    polygonOffsetFactor:-1,
+    polygonOffsetUnits: -1,
+  }), [])
 
   // ── Geometry (created once) ───────────────────────────────────────────
   const { geo, posArr, colArr, posAttr, colAttr } = useMemo(() => {
@@ -89,7 +151,10 @@ export function SpectrogramTerrain({ analyserRef, frequencyDataRef, configRef }:
   }, [])
 
   // ── Per-frame update ──────────────────────────────────────────────────
-  useFrame((_, delta) => {
+  useFrame((state, delta) => {
+    // Advance animated peak-glow uniform
+    glowMat.uniforms.uTime.value = state.clock.getElapsedTime()
+
     const { maxHeight, colorMode, hue } = configRef.current
 
     // Rebuild mono LUT only when hue slider changes (not every frame)
@@ -138,6 +203,15 @@ export function SpectrogramTerrain({ analyserRef, frequencyDataRef, configRef }:
 
     headRef.current = (head + 1) % ROWS
 
+    // ── 1b. Temporal smoothing ──────────────────────────────────────────
+    // Blend the newly-written row with the previous row so the surface
+    // undulates organically instead of stepping like a histogram.
+    for (let col = 0; col < COLS; col++) {
+      const v = _hist[head * COLS + col] * (1 - SMOOTH) + prevRowRef.current[col] * SMOOTH
+      _hist[head * COLS + col] = v
+      prevRowRef.current[col]  = v
+    }
+
     // ── 2. Write vertex Y positions and colours ─────────────────────
     // Vertex row 0 = newest row (histHead - 1), row ROWS-1 = oldest
     const newHead = headRef.current
@@ -165,13 +239,15 @@ export function SpectrogramTerrain({ analyserRef, frequencyDataRef, configRef }:
   })
 
   return (
-    <mesh geometry={geo}>
-      {/*
-        MeshBasicMaterial + vertexColors: each triangle interpolates between
-        its vertex colours. No lighting math, no postprocessing needed —
-        the colour gradient from the LUT IS the visual effect.
-      */}
-      <meshBasicMaterial vertexColors />
-    </mesh>
+    <>
+      {/* Solid mesh — vertex colours boosted by peak glow shader */}
+      <mesh geometry={geo}>
+        <primitive object={glowMat} attach="material" />
+      </mesh>
+      {/* Wireframe overlay — HUD data-grid aesthetic */}
+      <mesh geometry={geo}>
+        <primitive object={wireMat} attach="material" />
+      </mesh>
+    </>
   )
 }
