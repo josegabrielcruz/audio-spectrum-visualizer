@@ -2,7 +2,6 @@
 
 A real-time 3D audio visualizer that maps microphone input or audio file playback to four distinct visual modes rendered with React Three Fiber. Switch between a scrolling spectrogram terrain, a Lissajous 3D curve, a morphing icosphere, and a particle cloud — all driven live by the audio signal.
 
-![screenshot placeholder](./screenshot.png)
 
 ## Features
 
